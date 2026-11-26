@@ -43,6 +43,31 @@ Only `DISCORD_TOKEN` is required. Set `GUILD_ID` so slash commands appear immedi
 cargo run --release
 ```
 
+## 5. Keep it running (start at login, restart on crash)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1
+```
+
+This creates a Windows scheduled task named **Dapan Discord Bot**. At every login it starts `scripts\run-dapan.ps1` hidden in the background. That script:
+- restarts Dapan whenever it stops. After a quick crash it waits 10 s, then 20 s, and so on, up to 5 minutes; after a normal run it restarts in 5 s.
+- writes everything to `logs\dapan-YYYY-MM-DD.log` and deletes logs older than 14 days.
+- builds the release binary if it's missing, and waits for `.env` if it hasn't been created yet.
+- runs only one copy at a time.
+
+Day-to-day commands:
+
+```powershell
+Get-Content logs\dapan-$(Get-Date -f yyyy-MM-dd).log -Tail 30 -Wait   # watch the log
+Stop-ScheduledTask "Dapan Discord Bot"; Get-Process dapan | Stop-Process   # stop
+Start-ScheduledTask "Dapan Discord Bot"                                   # start again
+powershell -ExecutionPolicy Bypass -File scripts\uninstall-autostart.ps1  # remove autostart
+```
+
+**After changing the code:** stop the bot, run `cargo build --release`, then start it again. Windows won't replace `dapan.exe` while it's running.
+
+The bot runs only while you're logged in. Make sure Windows Sleep is set to **Never** (Settings → System → Power) so the bot stays online.
+
 ## Commands
 
 | Command | What it does |

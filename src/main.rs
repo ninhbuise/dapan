@@ -63,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
+        // No color codes when output goes to a log file (autostart script).
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .init();
 
     let cfg = Arc::new(Config::from_env()?);
