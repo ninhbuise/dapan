@@ -3,7 +3,8 @@
 A cute Vietnamese Discord bot written in Rust.
 
 - 🎶 **Music**: plays YouTube links, playlists or searches, and Spotify tracks, albums and playlists (it finds each Spotify song on YouTube).
-- 🗣️ **Text to speech**: reads Vietnamese in voice chat with Microsoft's *HoaiMy* neural voice, pitched up to sound cuter. Music volume drops automatically while it talks.
+- 🗣️ **Text to speech**: reads Vietnamese in voice chat with a local AI voice on your GPU ([VieNeu-TTS](https://github.com/pnnbao97/VieNeu-TTS), free), or Microsoft's *HoaiMy* voice as a fallback. Long text is read sentence by sentence, and music volume drops while it talks.
+- 📊 **Task tracking**: `/tasks` shows what Dapan is doing and how long each step took.
 - ☀️ **Weather**: `/weather`, a morning forecast, and alerts for heavy rain, storms or heat (Open-Meteo, no key needed).
 - 📅 **Calendar**: reminds you before events in Google Calendar, plus your own `/remind` reminders.
 
@@ -68,6 +69,93 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall-autostart.ps1  # remo
 
 The bot runs only while you're logged in. Make sure Windows Sleep is set to **Never** (Settings → System → Power) so the bot stays online.
 
+## 6. Local voice (VieNeu-TTS, optional but recommended)
+
+Microsoft's free voice is slow for long text. It generates audio at about playback speed, and it sometimes throttles. VieNeu-TTS v3 Turbo is a free (Apache 2.0) Vietnamese model that runs on your NVIDIA GPU, so speech starts almost instantly. It needs an NVIDIA driver 570 or newer, and about 6 GB of disk space.
+
+```powershell
+winget install Python.Python.3.11
+cd tts-server
+py -3.11 -m venv .venv
+.venv\Scripts\python -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+.venv\Scripts\python -m pip install "transformers==4.57.6" vieneu
+.venv\Scripts\python samples.py      # optional: a sample of every voice in tts-server\samples
+```
+
+Then add these to `.env` and run `scripts\install-autostart.ps1` again, which also adds a **Dapan TTS Server** login task:
+
+```
+TTS_LOCAL_URL=http://127.0.0.1:5005
+TTS_LOCAL_VOICE=Trúc Ly
+TTS_PITCH=0
+```
+
+- **Voices:** VieNeu has 25 preset voices (North, Central and South), for example *Trúc Ly* (default), *Mai Anh*, *Ngọc Huyền* and *Thùy Dung*. Listen to the files in `tts-server\samples` and put your favorite in `TTS_LOCAL_VOICE`. `TTS_PITCH` and `TTS_SPEED` still work on top if you want it cuter.
+- **Your own voice:** put a clean 3–8 second clip at `tts-server\voices\<name>.wav`, restart the TTS server, and set `TTS_LOCAL_VOICE=<name>`. Only clone voices you have permission to use.
+- **Fallback:** if the server is down or fails, Dapan uses Microsoft's voice automatically. `/tasks` shows which engine spoke ("local" or "Edge").
+- **Logs:** the TTS server logs to `logs\tts-YYYY-MM-DD.log`.
+
+## 7. Invite Dapan to other servers (friends)
+
+1. In `.env`, leave `GUILD_ID=` empty. Dapan then registers its commands for every server and removes the old copies from your server, so nothing shows twice. Set `OWNER_USER_ID` to your own user ID. Restart Dapan.
+2. In the Developer Portal, open your app, go to **Bot**, and turn on **Public Bot**.
+3. Share this link. Replace `<CLIENT_ID>` with your Application ID from the Developer Portal's **General Information** page:
+   `https://discord.com/oauth2/authorize?client_id=<CLIENT_ID>&scope=bot+applications.commands&permissions=3230784`
+
+The person adding it needs **Manage Server** permission. New commands can take a few minutes to appear; Ctrl+R in Discord reloads them.
+
+What's shared and what's private:
+- Music, TTS, `/weather` and `/remind` work for everyone.
+- `/calendar` shows your Google Calendar only to you (`OWNER_USER_ID`). Everyone else sees only their own reminders, and the reply is private.
+- The morning brief and weather/calendar alerts go only to you.
+
+## 8. Deploy to a VPS or AWS (instead of your PC)
+
+| Option | Cost | Notes |
+|---|---|---|
+| Hetzner / Vultr / DigitalOcean (Ubuntu, 2 GB RAM) | ~$4–6/month | Simplest, best value |
+| AWS Lightsail | $5/month (2 GB) | AWS's simple option |
+| AWS EC2 t3.micro / t4g.small | Free tier 12 months, then ~$8–12 | The free tier has 1 GB RAM: add swap space before building Rust |
+
+Steps on Ubuntu:
+
+```bash
+sudo apt update && sudo apt install -y build-essential cmake pkg-config ffmpeg git curl
+curl https://sh.rustup.rs -sSf | sh -s -- -y && source ~/.cargo/env
+sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && sudo chmod +x /usr/local/bin/yt-dlp
+curl -fsSL https://deno.land/install.sh | sh   # yt-dlp uses Deno for YouTube
+git clone https://github.com/<you>/dapan.git && cd dapan
+cargo build --release
+```
+
+Then:
+1. Copy `.env` (and `data/dapan.db` to keep reminders) from your PC with `scp`, not through git.
+2. Create `/etc/systemd/system/dapan.service`:
+
+```ini
+[Unit]
+Description=Dapan Discord bot
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/ubuntu/dapan
+ExecStart=/home/ubuntu/dapan/target/release/dapan
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/ubuntu/.deno/bin
+
+[Install]
+WantedBy=multi-user.target
+```
+
+3. Start it: `sudo systemctl enable --now dapan`. Watch the log with `journalctl -u dapan -f`.
+
+Watch out for:
+- **Run only one copy per token.** Stop the PC version first (`scripts\uninstall-autostart.ps1`); two copies would answer every command twice.
+- **YouTube often blocks server IPs** ("Sign in to confirm you're not a bot"). Home internet avoids this. On a server, yt-dlp needs your YouTube cookies.
+- **Local voice on a server** needs a GPU instance, which costs much more. Leave `TTS_LOCAL_URL` empty there and Dapan uses Microsoft's voice.
+- **Firewall:** voice only uses outgoing connections, so only SSH needs to be open.
+
 ## Commands
 
 | Command | What it does |
@@ -82,7 +170,8 @@ The bot runs only while you're logged in. Make sure Windows Sleep is set to **Ne
 | `/weather [city]` | Show the weather (no city = your home city) |
 | `/remind <when> <what>` | Set a reminder: `10m`, `2h`, `1h30m`, `14:30`, `mai 8:00`, `25/12 09:00` |
 | `/reminders` `/remind-delete <id>` | List or delete your reminders |
-| `/calendar` | Show today's and tomorrow's schedule |
+| `/calendar` | Show today's and tomorrow's schedule (private) |
+| `/tasks` | What Dapan is doing now, and how long recent tasks took, step by step (🐢 = slower than 5 s) |
 | `/help` `/ping` | |
 
 ## Automatic notifications
@@ -101,11 +190,12 @@ cargo test -- --include-ignored  # also tests Edge TTS + Open-Meteo for real (ne
 cargo clippy
 ```
 
-Code layout: `src/music` (playback and Spotify/YouTube link handling), `src/tts` (voice), `src/weather`, `src/calendar` (iCal + reminders), and `src/scheduler.rs` (background jobs).
+Code layout: `src/music` (playback and Spotify/YouTube link handling), `src/tts` (voice: `local.rs` VieNeu client, `edge.rs` Microsoft, `split.rs` sentence splitting), `src/weather`, `src/calendar` (iCal + reminders), `src/tracker.rs` (/tasks timings), `src/scheduler.rs` (background jobs), and `tts-server/` (the Python VieNeu server).
 
 ### Notes
 
 - **Spotify** doesn't let bots stream its audio, so Dapan reads each song's name from Spotify and plays it from YouTube. Spotify-made playlists (such as *Today's Top Hits*) can't be read with an app key.
 - **TTS**: Microsoft's service drops the connection when pitch is set in the request, so Dapan requests the normal voice and raises the pitch with FFmpeg instead (`TTS_PITCH`).
+- **Long text**: up to 2000 characters. Text is split into sentences of up to about 200 characters. The next sentence is generated while the current one plays, so there's no long silence and nothing is cut off.
 - **`vendor/msedge-tts`** is a patched copy of the `msedge-tts` crate. It sends timestamps and cookies the same way the reference *edge-tts* client does. Without that, Microsoft's service randomly refuses about half of all requests. Search for "Patched for dapan" to see the changes.
 - **iCal recurring events**: DAILY, WEEKLY (with BYDAY), MONTHLY and YEARLY are supported, along with INTERVAL, COUNT, UNTIL, EXDATE and edited single occurrences. More complex rules (for example "second Tuesday of the month") only notify for the first occurrence.

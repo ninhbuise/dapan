@@ -32,6 +32,10 @@ pub struct Config {
     pub tts_pitch: f32,
     /// Speaking speed multiplier (1.0 = normal).
     pub tts_speed: f32,
+    /// URL of the local VieNeu-TTS server. When set, it is used first and Edge is the fallback.
+    pub tts_local_url: Option<String>,
+    /// Voice for the local server: a preset name ("Mai Anh") or a cloned voice name.
+    pub tts_local_voice: Option<String>,
 
     pub database_path: String,
 }
@@ -84,6 +88,8 @@ impl Config {
             }),
             tts_pitch: opt_parse("TTS_PITCH")?.unwrap_or(2.5),
             tts_speed: opt_parse("TTS_SPEED")?.unwrap_or(1.05),
+            tts_local_url: opt("TTS_LOCAL_URL"),
+            tts_local_voice: opt("TTS_LOCAL_VOICE"),
             database_path: opt("DATABASE_PATH").unwrap_or_else(|| "data/dapan.db".into()),
         })
     }
