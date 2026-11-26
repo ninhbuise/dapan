@@ -4,6 +4,7 @@
 //! requested at its natural pitch and made cuter afterwards with FFmpeg.
 
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use msedge_tts::tts::SpeechConfig;
@@ -40,8 +41,16 @@ fn voice_filter(semitones: f32, speed: f32) -> String {
     )
 }
 
+/// Result of [`synthesize`], with timings for /tasks and the logs.
+pub struct Synth {
+    pub mp3: Vec<u8>,
+    pub attempts: u32,
+    pub edge_time: Duration,
+    pub pitch_time: Option<Duration>,
+}
+
 /// Synthesises `text` and returns MP3 bytes.
-pub async fn synthesize(cfg: &Config, text: &str) -> Result<Vec<u8>> {
+pub async fn synthesize(cfg: &Config, text: &str) -> Result<Synth> {
     let config = SpeechConfig {
         voice_name: cfg.tts_voice.clone(),
         audio_format: "audio-24khz-48kbitrate-mono-mp3".into(),
@@ -49,26 +58,42 @@ pub async fn synthesize(cfg: &Config, text: &str) -> Result<Vec<u8>> {
         rate: 0,
         volume: 0,
     };
-    let mp3 = synth_with_retry(&xml_escape(text), &config).await?;
+    let t = Instant::now();
+    let (mp3, attempts) = synth_with_retry(&xml_escape(text), &config).await?;
+    let edge_time = t.elapsed();
 
     if cfg.tts_pitch == 0.0 && (cfg.tts_speed - 1.0).abs() < f32::EPSILON {
-        return Ok(mp3);
+        return Ok(Synth {
+            mp3,
+            attempts,
+            edge_time,
+            pitch_time: None,
+        });
     }
-    match cutify(&mp3, cfg.tts_pitch, cfg.tts_speed).await {
-        Ok(v) => Ok(v),
+    let t = Instant::now();
+    let mp3 = match cutify(&mp3, cfg.tts_pitch, cfg.tts_speed).await {
+        Ok(v) => v,
         Err(e) => {
             tracing::warn!("ffmpeg pitch shift failed, using the plain voice: {e:#}");
-            Ok(mp3)
+            mp3
         }
-    }
+    };
+    Ok(Synth {
+        mp3,
+        attempts,
+        edge_time,
+        pitch_time: Some(t.elapsed()),
+    })
 }
 
-/// The Edge service occasionally resets a connection, so each attempt uses a fresh one.
-async fn synth_with_retry(ssml_text: &str, config: &SpeechConfig) -> Result<Vec<u8>> {
+/// The Edge service occasionally resets or stalls a connection, so each attempt uses a
+/// fresh one and is cut off after a few seconds. Returns the audio and attempts used.
+async fn synth_with_retry(ssml_text: &str, config: &SpeechConfig) -> Result<(Vec<u8>, u32)> {
     const ATTEMPTS: u32 = 4;
+    const PER_ATTEMPT: Duration = Duration::from_secs(8);
     let mut last_err = None;
     for attempt in 1..=ATTEMPTS {
-        let result = async {
+        let result = tokio::time::timeout(PER_ATTEMPT, async {
             let mut client = connect_async()
                 .await
                 .context("không kết nối được Edge TTS")?;
@@ -77,14 +102,20 @@ async fn synth_with_retry(ssml_text: &str, config: &SpeechConfig) -> Result<Vec<
                 bail!("Edge TTS trả về âm thanh rỗng");
             }
             Ok(audio.audio_bytes)
-        }
-        .await;
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(anyhow::anyhow!(
+                "Edge TTS quá {}s không trả lời",
+                PER_ATTEMPT.as_secs()
+            ))
+        });
         match result {
-            Ok(v) => return Ok(v),
+            Ok(v) => return Ok((v, attempt)),
             Err(e) => {
-                tracing::debug!("Edge TTS attempt {attempt}/{ATTEMPTS} failed: {e:#}");
+                tracing::info!("Edge TTS attempt {attempt}/{ATTEMPTS} failed: {e:#}");
                 last_err = Some(e);
-                tokio::time::sleep(std::time::Duration::from_millis(250 * attempt as u64)).await;
+                tokio::time::sleep(Duration::from_millis(250 * attempt as u64)).await;
             }
         }
     }
@@ -155,6 +186,11 @@ mod live {
         let mp3 = super::synthesize(&cfg, "Xin chào, mình là Dapan nè! Hôm nay bạn thế nào?")
             .await
             .unwrap();
+        println!(
+            "edge {:?} ({} attempts), ffmpeg {:?}",
+            mp3.edge_time, mp3.attempts, mp3.pitch_time
+        );
+        let mp3 = mp3.mp3;
         assert!(mp3.len() > 5_000, "audio too short: {} bytes", mp3.len());
         let path = std::env::temp_dir().join("dapan_tts_test.mp3");
         std::fs::write(&path, &mp3).unwrap();

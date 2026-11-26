@@ -95,9 +95,24 @@ async fn remind_delete(
 async fn calendar(ctx: Context<'_>) -> Result<(), Error> {
     let data = ctx.data();
     let today = Utc::now().with_timezone(&data.cfg.tz).date_naive();
+    // The Google Calendar belongs to the bot owner: only they see it. Everyone sees only
+    // their own reminders. The reply is ephemeral so nothing leaks into shared channels.
+    let is_owner = data.cfg.owner_user_id == Some(ctx.author().id.get());
+    let events = if is_owner {
+        data.calendar.read().await.clone()
+    } else {
+        Vec::new()
+    };
     let mut e = CreateEmbed::new().title("📅 Lịch của bạn").color(PINK);
     for (label, day) in [("Hôm nay", today), ("Ngày mai", today + Duration::days(1))] {
-        let text = agenda(data, day).await?;
+        let text = agenda_from(
+            &events,
+            &data.db,
+            data.cfg.tz,
+            day,
+            Some(ctx.author().id.get()),
+        )
+        .await?;
         e = e.field(
             label,
             if text.is_empty() {
@@ -108,12 +123,13 @@ async fn calendar(ctx: Context<'_>) -> Result<(), Error> {
             false,
         );
     }
-    if data.cfg.ical_url.is_none() {
+    if is_owner && data.cfg.ical_url.is_none() {
         e = e.footer(poise::serenity_prelude::CreateEmbedFooter::new(
             "Chưa kết nối Google Calendar (ICAL_URL), chỉ hiện lời nhắc /remind",
         ));
     }
-    ctx.send(CreateReply::default().embed(e)).await?;
+    ctx.send(CreateReply::default().embed(e).ephemeral(true))
+        .await?;
     Ok(())
 }
 
@@ -126,16 +142,13 @@ fn day_bounds(tz: Tz, day: NaiveDate) -> anyhow::Result<(DateTime<Utc>, DateTime
     Ok((start, start + Duration::days(1)))
 }
 
-/// Calendar events + pending reminders on `day`, one per line.
-pub async fn agenda(data: &Data, day: NaiveDate) -> anyhow::Result<String> {
-    agenda_from(&data.calendar.read().await, &data.db, data.cfg.tz, day).await
-}
-
+/// `events` + pending reminders of `user` (none if `None`) on `day`, one per line.
 pub async fn agenda_from(
     events: &[ical::Occurrence],
     db: &SqlitePool,
     tz: Tz,
     day: NaiveDate,
+    user: Option<u64>,
 ) -> anyhow::Result<String> {
     let (start, end) = day_bounds(tz, day)?;
     let mut lines: Vec<(i64, String)> = Vec::new();
@@ -155,21 +168,27 @@ pub async fn agenda_from(
             format!("🗓️ `{when}` {}{loc}", o.summary),
         ));
     }
-    let rows: Vec<(i64, String, i64)> = sqlx::query_as(
-        "SELECT user_id, text, remind_at FROM reminders WHERE sent = 0 AND remind_at >= ? AND remind_at < ?",
-    )
-    .bind(start.timestamp())
-    .bind(end.timestamp())
-    .fetch_all(db)
-    .await?;
-    for (user, text, at) in rows {
+    let rows: Vec<(String, i64)> = match user {
+        Some(uid) => {
+            sqlx::query_as(
+                "SELECT text, remind_at FROM reminders WHERE sent = 0 AND user_id = ? AND remind_at >= ? AND remind_at < ?",
+            )
+            .bind(uid as i64)
+            .bind(start.timestamp())
+            .bind(end.timestamp())
+            .fetch_all(db)
+            .await?
+        }
+        None => Vec::new(),
+    };
+    for (text, at) in rows {
         let when = Utc
             .timestamp_opt(at, 0)
             .single()
             .unwrap_or(start)
             .with_timezone(&tz)
             .format("%H:%M");
-        lines.push((at, format!("⏰ `{when}` {text} (<@{user}>)")));
+        lines.push((at, format!("⏰ `{when}` {text}")));
     }
     lines.sort_by_key(|l| l.0);
     Ok(lines

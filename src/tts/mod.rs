@@ -1,7 +1,7 @@
 pub mod edge;
 
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use poise::serenity_prelude::{self as serenity, ChannelId, GuildId, Message};
@@ -11,6 +11,7 @@ use songbird::input::Input;
 use tokio::sync::{Mutex, oneshot};
 
 use crate::music::{ensure_call, user_voice_channel};
+use crate::tracker::secs;
 use crate::{Context, Data, Error};
 
 const MAX_CHARS: usize = 300;
@@ -43,13 +44,59 @@ fn guild_lock(data: &Data, guild: GuildId) -> Arc<Mutex<()>> {
         .clone()
 }
 
-/// Speaks `text` in the guild's current call, lowering the music while talking.
-pub async fn speak(data: &Data, guild: GuildId, call: Arc<Mutex<Call>>, text: &str) -> Result<()> {
+/// Creates the voice audio for `text`, recording timings on tracker task `key`.
+/// Runs before waiting for a turn, so it overlaps with joining voice or earlier speech.
+pub async fn prepare(data: &Data, text: &str, key: u64) -> Result<Vec<u8>> {
     let text: String = text.chars().take(MAX_CHARS).collect();
+    let s = edge::synthesize(&data.cfg, &text).await?;
+    let mut note = format!("Edge {}", secs(s.edge_time));
+    if s.attempts > 1 {
+        note.push_str(&format!(" ({} lần thử)", s.attempts));
+    }
+    if let Some(p) = s.pitch_time {
+        note.push_str(&format!(" · FFmpeg {}", secs(p)));
+    }
+    data.tracker.note(key, note);
+    Ok(s.mp3)
+}
+
+/// Joins voice (if needed) and prepares the audio at the same time.
+async fn join_and_prepare(
+    data: &Data,
+    guild: GuildId,
+    channel: Option<ChannelId>,
+    text: &str,
+    key: u64,
+) -> Result<(Arc<Mutex<Call>>, Vec<u8>)> {
+    data.tracker.stage(key, "vào voice + tạo giọng");
+    let join = async {
+        let t = Instant::now();
+        let r = ensure_call(data, guild, channel).await;
+        (r, t.elapsed())
+    };
+    let ((call, join_time), audio) = tokio::join!(join, prepare(data, text, key));
+    data.tracker
+        .note(key, format!("vào voice {}", secs(join_time)));
+    Ok((call?, audio?))
+}
+
+/// Plays prepared voice audio, one speaker at a time per guild, lowering the music.
+pub async fn play(
+    data: &Data,
+    guild: GuildId,
+    call: Arc<Mutex<Call>>,
+    audio: Vec<u8>,
+    key: u64,
+) -> Result<()> {
+    data.tracker.stage(key, "chờ lượt");
     let lock = guild_lock(data, guild);
     let _turn = lock.lock().await; // one sentence at a time
+    data.tracker.stage(key, "đang nói");
+    if let Some(el) = data.tracker.elapsed(key) {
+        data.tracker
+            .note(key, format!("⏱ bắt đầu nói sau {}", secs(el)));
+    }
 
-    let audio = edge::synthesize(&data.cfg, &text).await?;
     let base_vol = data.volume(guild);
 
     let (tx, rx) = oneshot::channel();
@@ -85,10 +132,16 @@ async fn say(
     text: String,
 ) -> Result<(), Error> {
     let guild = ctx.guild_id().context("guild only")?;
+    let data = ctx.data();
     let channel = user_voice_channel(ctx.serenity_context(), guild, ctx.author().id);
-    let call = ensure_call(ctx.data(), guild, channel).await?;
+    if channel.is_none() && data.songbird.get(guild).is_none() {
+        anyhow::bail!("Bạn vào một kênh voice trước rồi gọi Dapan nha 🥺");
+    }
+    // Reply right away: Discord gives up on a command after 3 seconds without an answer.
     ctx.say(format!("🗣️ {text}")).await?;
-    speak(ctx.data(), guild, call, &text).await?;
+    let key = ctx.id();
+    let (call, audio) = join_and_prepare(data, guild, channel, &text, key).await?;
+    play(data, guild, call, audio, key).await?;
     Ok(())
 }
 
@@ -157,17 +210,28 @@ pub async fn on_message(ctx: &serenity::Context, data: &Data, msg: &Message) {
     let Some(author_vc) = user_voice_channel(ctx, guild, msg.author.id) else {
         return;
     };
-    let call = match ensure_call(data, guild, Some(author_vc)).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("auto-tts join failed: {e}");
-            return;
-        }
-    };
-    if let Err(e) = speak(data, guild, call, &text).await {
+    let key = msg.id.get();
+    let server = ctx
+        .cache
+        .guild(guild)
+        .map(|g| g.name.clone())
+        .unwrap_or_default();
+    data.tracker.start(
+        key,
+        "tự đọc tin nhắn",
+        format!("{} @ {server}", msg.author.name),
+    );
+    let result = async {
+        let (call, audio) = join_and_prepare(data, guild, Some(author_vc), &text, key).await?;
+        play(data, guild, call, audio, key).await
+    }
+    .await;
+    if let Err(e) = &result {
         tracing::warn!("auto-tts failed: {e:#}");
+        data.tracker.note(key, format!("lỗi: {e}"));
         let _ = msg.react(ctx, '😵').await;
     }
+    data.tracker.finish(key, result.is_ok());
 }
 
 #[cfg(test)]

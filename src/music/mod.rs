@@ -123,10 +123,14 @@ async fn play(
     query: String,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let (guild, call) = call_for_author(ctx).await?;
     let data = ctx.data();
+    let key = ctx.id();
+    data.tracker.stage(key, "vào voice");
+    let (guild, call) = call_for_author(ctx).await?;
 
+    data.tracker.stage(key, "tìm bài");
     let tracks = resolve::resolve(&data.http, &data.spotify, &query).await?;
+    data.tracker.stage(key, "thêm vào hàng chờ");
     let count = tracks.len();
     let first_title = tracks[0].title.clone();
     let first_url = tracks[0].url.clone();

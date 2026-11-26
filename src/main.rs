@@ -7,6 +7,7 @@ mod db;
 mod music;
 mod notify;
 mod scheduler;
+mod tracker;
 mod tts;
 mod weather;
 
@@ -42,6 +43,8 @@ pub struct Data {
     pub tts_locks: StdMutex<HashMap<GuildId, Arc<tokio::sync::Mutex<()>>>>,
     /// Upcoming events from the iCal feed.
     pub calendar: Arc<RwLock<Vec<calendar::ical::Occurrence>>>,
+    /// What the bot is doing now and how long recent tasks took (/tasks).
+    pub tracker: tracker::Tracker,
 }
 
 impl Data {
@@ -97,9 +100,10 @@ async fn main() -> anyhow::Result<()> {
         tts_channels: StdMutex::new(tts_channels),
         tts_locks: StdMutex::new(HashMap::new()),
         calendar: Arc::new(RwLock::new(Vec::new())),
+        tracker: tracker::Tracker::default(),
     };
 
-    let mut commands = vec![ping(), help()];
+    let mut commands = vec![ping(), help(), tasks()];
     commands.extend(music::commands());
     commands.extend(tts::commands());
     commands.extend(weather::commands());
@@ -110,17 +114,51 @@ async fn main() -> anyhow::Result<()> {
             commands,
             event_handler: |fw, event| Box::pin(event_handler(fw, event)),
             on_error: |err| Box::pin(on_error(err)),
+            pre_command: |ctx| {
+                Box::pin(async move {
+                    ctx.data()
+                        .tracker
+                        .start(ctx.id(), ctx.invocation_string(), who(ctx));
+                })
+            },
+            post_command: |ctx| {
+                Box::pin(async move {
+                    ctx.data().tracker.finish(ctx.id(), true);
+                })
+            },
             ..Default::default()
         })
         .setup(move |ctx, ready, framework| {
             Box::pin(async move {
                 tracing::info!("Đã đăng nhập: {}", ready.user.name);
                 let cmds = &framework.options().commands;
+                let registered = match data.cfg.guild_id {
+                    Some(g) => poise::builtins::register_in_guild(ctx, cmds, GuildId::new(g)).await,
+                    None => poise::builtins::register_globally(ctx, cmds).await,
+                };
+                if let Err(e) = registered {
+                    // Exit so the runner script retries, instead of staying online without commands.
+                    tracing::error!(
+                        "Không đăng ký được lệnh: {e}. Kiểm tra GUILD_ID và mời bot vào server với scope applications.commands."
+                    );
+                    std::process::exit(2);
+                }
                 match data.cfg.guild_id {
-                    Some(g) => {
-                        poise::builtins::register_in_guild(ctx, cmds, GuildId::new(g)).await?
+                    Some(g) => tracing::info!("Đã đăng ký {} lệnh cho server {g}", cmds.len()),
+                    None => {
+                        // Remove server-only copies left from when GUILD_ID was set,
+                        // otherwise those servers show every command twice.
+                        for g in &ready.guilds {
+                            if let Err(e) = g.id.set_commands(&ctx.http, Vec::new()).await {
+                                tracing::warn!("không xoá được lệnh cũ ở server {}: {e}", g.id);
+                            }
+                        }
+                        tracing::info!(
+                            "Đã đăng ký {} lệnh toàn cục cho mọi server ({} server hiện tại)",
+                            cmds.len(),
+                            ready.guilds.len()
+                        );
                     }
-                    None => poise::builtins::register_globally(ctx, cmds).await?,
                 }
                 scheduler::spawn_all(ctx.http.clone(), &data);
                 Ok(data)
@@ -152,6 +190,8 @@ async fn event_handler(
 async fn on_error(err: poise::FrameworkError<'_, Data, Error>) {
     match err {
         poise::FrameworkError::Command { error, ctx, .. } => {
+            ctx.data().tracker.note(ctx.id(), format!("lỗi: {error}"));
+            ctx.data().tracker.finish(ctx.id(), false);
             tracing::warn!("command /{} failed: {error:#}", ctx.command().name);
             let _ = ctx.say(format!("Huhu, có lỗi rồi (｡•́︿•̀｡): {error}")).await;
         }
@@ -161,6 +201,72 @@ async fn on_error(err: poise::FrameworkError<'_, Data, Error>) {
             }
         }
     }
+}
+
+/// "user @ server" label for logs.
+fn who(ctx: Context<'_>) -> String {
+    let server = ctx
+        .guild()
+        .map(|g| g.name.clone())
+        .unwrap_or_else(|| "DM".into());
+    format!("{} @ {server}", ctx.author().name)
+}
+
+/// Bot đang làm gì và mất bao lâu
+#[poise::command(slash_command, prefix_command)]
+async fn tasks(ctx: Context<'_>) -> Result<(), Error> {
+    let snap = ctx.data().tracker.snapshot(10);
+    let running = if snap.running.len() <= 1 {
+        "Không có việc nào khác 😴".to_string() // only this /tasks call itself
+    } else {
+        snap.running
+            .iter()
+            .filter(|(name, ..)| !name.starts_with("/tasks"))
+            .map(|(name, who, el, stage)| {
+                format!(
+                    "⏳ `{name}` · {who} · {} · đang **{stage}**",
+                    tracker::secs(*el)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let recent = if snap.recent.is_empty() {
+        "Chưa có".to_string()
+    } else {
+        snap.recent
+            .iter()
+            .map(|f| {
+                let mark = if f.ok { "✅" } else { "❌" };
+                let slow = if f.took.as_secs() >= 5 { " 🐢" } else { "" };
+                let detail = if f.detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n  └ {}", f.detail.chars().take(150).collect::<String>())
+                };
+                format!(
+                    "{mark} <t:{}:T> `{}` · {} · **{}**{slow}{detail}",
+                    f.at.timestamp(),
+                    f.name.chars().take(40).collect::<String>(),
+                    f.who,
+                    tracker::secs(f.took)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let e = serenity::CreateEmbed::new()
+        .title("📊 Dapan đang làm gì?")
+        .field("Đang chạy", running, false)
+        .field(
+            "Gần đây",
+            recent.chars().take(1024).collect::<String>(),
+            false,
+        )
+        .color(notify::PINK);
+    ctx.send(poise::CreateReply::default().embed(e).ephemeral(true))
+        .await?;
+    Ok(())
 }
 
 /// Kiểm tra bot còn sống không

@@ -193,7 +193,8 @@ async fn morning_brief(s: &Shared, today: NaiveDate) {
         Err(e) => tracing::warn!("morning forecast failed: {e:#}"),
     }
     let events = s.calendar.read().await.clone();
-    match calendar::agenda_from(&events, &s.db, s.cfg.tz, today).await {
+    // Only the owner's own reminders go into the brief, never other users'.
+    match calendar::agenda_from(&events, &s.db, s.cfg.tz, today, s.cfg.owner_user_id).await {
         Ok(text) if !text.is_empty() => {
             let e = CreateEmbed::new()
                 .title("📅 Lịch hôm nay")
