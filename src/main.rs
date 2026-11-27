@@ -34,7 +34,9 @@ pub struct Data {
     pub songbird: Arc<Songbird>,
     pub spotify: music::spotify::Spotify,
     /// Music volume per guild (0.0 – 2.0).
-    pub volumes: StdMutex<HashMap<GuildId, f32>>,
+    pub volumes: Arc<StdMutex<HashMap<GuildId, f32>>>,
+    /// Loop mode, autoplay and history per guild.
+    pub music: music::auto::MusicState,
     /// Last time something was played or spoken in a guild (used for idle disconnect).
     pub last_activity: Arc<StdMutex<HashMap<GuildId, Instant>>>,
     /// Text channel per guild whose messages are read aloud.
@@ -110,7 +112,8 @@ async fn main() -> anyhow::Result<()> {
             cfg.spotify_client_id.clone(),
             cfg.spotify_client_secret.clone(),
         ),
-        volumes: StdMutex::new(HashMap::new()),
+        volumes: Arc::new(StdMutex::new(HashMap::new())),
+        music: Default::default(),
         last_activity: Arc::new(StdMutex::new(HashMap::new())),
         tts_channels: StdMutex::new(tts_channels),
         tts_locks: StdMutex::new(HashMap::new()),

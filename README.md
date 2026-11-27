@@ -167,7 +167,11 @@ Watch out for:
 |---|---|
 | `/play <link or song name>` | Play from YouTube or Spotify (`/p`) |
 | `/skip` `/stop` `/pause` `/resume` | Control playback |
-| `/queue` `/nowplaying` | Show the queue or the current song |
+| `/queue [page]` `/nowplaying` | Show the queue (10 songs per page, with loop/autoplay status) or the current song |
+| `/remove <n>` `/move <from> <to>` `/skipto <n>` | Remove, reorder, or jump to song *n* (numbers from `/queue`) |
+| `/shuffle` `/clear` | Shuffle the songs waiting, or remove them (the current song keeps playing) |
+| `/loop off/track/queue` | Repeat nothing, the current song (until `/skip`), or the whole queue |
+| `/autoplay [on/off]` | When one song is left, Dapan queues a related one from YouTube's Mix (no repeats of recent songs, nothing over 15 min) and posts it here (`/ap`) |
 | `/volume <0-200>` | Set the volume |
 | `/join` `/leave` | Join or leave voice (the bot also leaves after 5 minutes idle) |
 | `/say <text>` | Speak the text in voice chat |
