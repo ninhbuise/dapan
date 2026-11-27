@@ -11,6 +11,7 @@ Settings (environment variables):
     VIENEU_HOST   default 127.0.0.1 (only this PC can reach it)
     VIENEU_PORT   default 5005
     VIENEU_VOICE  default voice, default "Trúc Ly"
+    VIENEU_KEEPWARM  seconds between keep-warm runs while idle, default 20 (0 = off)
 """
 
 import io
@@ -31,11 +32,23 @@ PORT = int(os.environ.get("VIENEU_PORT", "5005"))
 DEFAULT_VOICE = os.environ.get("VIENEU_VOICE", "Trúc Ly")
 VOICES_DIR = Path(__file__).with_name("voices")
 MAX_TEXT = 1000
+KEEPWARM = float(os.environ.get("VIENEU_KEEPWARM", "20"))
+last_use = time.time()
 
 
 def log(msg: str) -> None:
     print(time.strftime("%Y-%m-%d %H:%M:%S"), "[tts-server]", msg, flush=True)
 
+
+try:
+    import torch
+
+    if torch.cuda.is_available():
+        log(f"device: CUDA {torch.cuda.get_device_name(0)} (torch {torch.__version__})")
+    else:
+        log(f"device: CPU only - CUDA not available (torch {torch.__version__}); synthesis will be slow")
+except Exception as e:  # noqa: BLE001
+    log(f"could not check torch device: {e}")
 
 log("loading VieNeu-TTS (first start downloads the model)...")
 t0 = time.time()
@@ -61,6 +74,30 @@ try:
         tts.infer("Xin chào.", voice=DEFAULT_VOICE)
 except Exception as e:  # noqa: BLE001
     log(f"warm-up failed (is VIENEU_VOICE '{DEFAULT_VOICE}' valid?): {e}")
+
+
+def keep_warm() -> None:
+    """While idle, run a tiny synthesis now and then so the GPU stays ready.
+
+    Without this, the first request after a quiet minute takes 3-4 s instead of ~0.3 s."""
+    global last_use
+    while True:
+        time.sleep(KEEPWARM / 2)
+        if time.time() - last_use < KEEPWARM:
+            continue
+        if not lock.acquire(blocking=False):
+            continue  # a real request is running
+        try:
+            tts.infer("ừ.", voice=DEFAULT_VOICE)
+        except Exception as e:  # noqa: BLE001
+            log(f"keep-warm failed: {e}")
+        finally:
+            last_use = time.time()
+            lock.release()
+
+
+if KEEPWARM > 0:
+    threading.Thread(target=keep_warm, daemon=True).start()
 
 
 def to_wav(audio) -> bytes:
@@ -104,9 +141,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": "empty text"})
             if voice not in ALL_VOICES:
                 return self._json(400, {"error": f"unknown voice '{voice}'", "voices": ALL_VOICES})
+            global last_use
             t = time.time()
             with lock:
                 audio = tts.infer(text, voice=voice)
+                last_use = time.time()
             wav = to_wav(audio)
             secs = len(np.asarray(audio).flatten()) / SAMPLE_RATE
             log(f"{len(text)} chars -> {secs:.1f}s audio in {time.time() - t:.2f}s ({voice})")

@@ -21,6 +21,6 @@ Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Get-Process dapan -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
-    Where-Object { $_.CommandLine -like '*server.py*' } |
+    Where-Object { $_.CommandLine -match 'python\.exe"?\s+server\.py' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Write-Host 'Dapan and the TTS server are stopped.'
