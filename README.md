@@ -165,7 +165,7 @@ Watch out for:
 
 | Command | What it does |
 |---|---|
-| `/play <link or song name>` | Play from YouTube or Spotify (`/p`) |
+| `/play <link or song name> [autoplay]` | Play from YouTube or Spotify. `autoplay: True/False` turns autoplay on or off for this server (default: `AUTOPLAY` in `.env`) |
 | `/skip` `/stop` `/pause` `/resume` | Control playback |
 | `/queue [page]` `/nowplaying` | Show the queue (10 songs per page, with loop/autoplay status) or the current song |
 | `/remove <n>` `/move <from> <to>` `/skipto <n>` | Remove, reorder, or jump to song *n* (numbers from `/queue`) |

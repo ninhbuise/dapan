@@ -60,6 +60,7 @@ pub fn player(ctx: Context<'_>) -> Player {
         state: d.music.clone(),
         volumes: d.volumes.clone(),
         activity: d.last_activity.clone(),
+        default_autoplay: d.cfg.autoplay,
     }
 }
 
@@ -156,12 +157,12 @@ async fn join(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Phát nhạc từ YouTube / Spotify (link hoặc tên bài)
-#[poise::command(slash_command, prefix_command, guild_only, aliases("p"))]
+#[poise::command(slash_command, guild_only)]
 async fn play(
     ctx: Context<'_>,
-    #[description = "Link YouTube/Spotify hoặc tên bài hát"]
-    #[rest]
-    query: String,
+    #[description = "Link YouTube/Spotify hoặc tên bài hát"] query: String,
+    #[description = "Hết hàng chờ thì tự phát bài liên quan (bỏ trống = giữ như cũ)"]
+    autoplay: Option<bool>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let data = ctx.data();
@@ -178,9 +179,13 @@ async fn play(
     let first_dur = tracks[0].duration;
 
     let p = player(ctx);
-    p.with(guild, |g| {
+    let auto_on = p.with(guild, |g| {
         g.stopped = false;
         g.channel = Some(ctx.channel_id());
+        if let Some(on) = autoplay {
+            g.autoplay = on;
+        }
+        g.autoplay
     });
     let mut handler = call.lock().await;
     let was_empty = handler.queue().is_empty();
@@ -220,6 +225,15 @@ async fn play(
             e = e.field("Vị trí", pos.to_string(), true);
         }
         e
+    };
+    let msg = if autoplay.is_some() || auto_on {
+        msg.footer(poise::serenity_prelude::CreateEmbedFooter::new(if auto_on {
+            "🤖 Tự phát: bật · hết hàng chờ sẽ tự chọn bài liên quan"
+        } else {
+            "🤖 Tự phát: tắt"
+        }))
+    } else {
+        msg
     };
     ctx.send(CreateReply::default().embed(msg)).await?;
     Ok(())

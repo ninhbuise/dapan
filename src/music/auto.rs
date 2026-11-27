@@ -75,11 +75,22 @@ pub struct Player {
     pub state: MusicState,
     pub volumes: Arc<StdMutex<HashMap<GuildId, f32>>>,
     pub activity: Arc<StdMutex<HashMap<GuildId, Instant>>>,
+    /// AUTOPLAY from .env: autoplay state for a server that hasn't used /autoplay.
+    pub default_autoplay: bool,
 }
 
 impl Player {
     pub fn with<R>(&self, guild: GuildId, f: impl FnOnce(&mut GuildMusic) -> R) -> R {
-        f(self.state.lock().unwrap().entry(guild).or_default())
+        let default_autoplay = self.default_autoplay;
+        f(self
+            .state
+            .lock()
+            .unwrap()
+            .entry(guild)
+            .or_insert_with(|| GuildMusic {
+                autoplay: default_autoplay,
+                ..Default::default()
+            }))
     }
 
     fn volume(&self, guild: GuildId) -> f32 {

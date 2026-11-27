@@ -37,6 +37,9 @@ pub struct Config {
     /// Voice for the local server: a preset name ("Mai Anh") or a cloned voice name.
     pub tts_local_voice: Option<String>,
 
+    /// Autoplay related songs when the queue runs out, until /autoplay changes it.
+    pub autoplay: bool,
+
     pub database_path: String,
 }
 
@@ -90,6 +93,7 @@ impl Config {
             tts_speed: opt_parse("TTS_SPEED")?.unwrap_or(1.05),
             tts_local_url: opt("TTS_LOCAL_URL"),
             tts_local_voice: opt("TTS_LOCAL_VOICE"),
+            autoplay: opt_parse("AUTOPLAY")?.unwrap_or(true),
             database_path: opt("DATABASE_PATH").unwrap_or_else(|| "data/dapan.db".into()),
         })
     }
