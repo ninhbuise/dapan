@@ -61,7 +61,15 @@ impl Data {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = dotenvy::dotenv();
+    // A bad line makes dotenvy silently skip everything after it, so treat it as fatal.
+    // (A missing .env is fine: settings can also come from real environment variables.)
+    if let Err(e) = dotenvy::dotenv()
+        && !e.not_found()
+    {
+        anyhow::bail!(
+            ".env có dòng lỗi: {e}. Giá trị có dấu cách phải để trong ngoặc kép, ví dụ HOME_CITY=\"Hà Nội\""
+        );
+    }
     // Several deps pull different rustls crypto backends; pick one explicitly.
     let _ = rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt()
@@ -71,6 +79,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cfg = Arc::new(Config::from_env()?);
+    match &cfg.tts_local_url {
+        Some(url) => tracing::info!(
+            "Giọng nói: local {url} ({}), dự phòng Edge",
+            cfg.tts_local_voice.as_deref().unwrap_or("mặc định")
+        ),
+        None => tracing::info!("Giọng nói: Edge (TTS_LOCAL_URL chưa đặt)"),
+    }
     let db = db::connect(&cfg.database_path).await?;
     let http = reqwest::Client::builder()
         .user_agent("dapan-discord-bot/0.1")

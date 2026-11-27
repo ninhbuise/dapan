@@ -44,30 +44,35 @@ Only `DISCORD_TOKEN` is required. Set `GUILD_ID` so slash commands appear immedi
 cargo run --release
 ```
 
-## 5. Keep it running (start at login, restart on crash)
+## 5. Keep it running (starts with Windows, in the background)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1
 ```
 
-This creates a Windows scheduled task named **Dapan Discord Bot**. At every login it starts `scripts\run-dapan.ps1` hidden in the background. That script:
-- restarts Dapan whenever it stops. After a quick crash it waits 10 s, then 20 s, and so on, up to 5 minutes; after a normal run it restarts in 5 s.
-- writes everything to `logs\dapan-YYYY-MM-DD.log` and deletes logs older than 14 days.
-- builds the release binary if it's missing, and waits for `.env` if it hasn't been created yet.
+Windows asks for administrator permission (UAC); click **Yes**. The script creates two scheduled tasks, **Dapan Discord Bot** and **Dapan TTS Server** (the second only if the local voice is installed). They:
+- **start when Windows boots**, even before you log in, and keep running after you log out.
+- **run in the background** in a separate Windows session, so no console window ever appears. Windows runs them as your user without storing your password.
+
+Each task runs a script (`scripts\run-dapan.ps1` or `scripts\run-tts-server.ps1`) that:
+- restarts the program whenever it stops. After a quick crash it waits 10 s, then 20 s, and so on, up to 5 minutes; after a normal run it restarts in 5 s.
+- writes everything to `logs\dapan-YYYY-MM-DD.log` and `logs\tts-YYYY-MM-DD.log`, and deletes logs older than 14 days.
+- builds Dapan if the binary is missing, and waits for `.env` if it hasn't been created yet.
 - runs only one copy at a time.
 
-Day-to-day commands:
+Day-to-day commands (each asks for administrator permission):
 
 ```powershell
-Get-Content logs\dapan-$(Get-Date -f yyyy-MM-dd).log -Tail 30 -Wait   # watch the log
-Stop-ScheduledTask "Dapan Discord Bot"; Get-Process dapan | Stop-Process   # stop
-Start-ScheduledTask "Dapan Discord Bot"                                   # start again
-powershell -ExecutionPolicy Bypass -File scripts\uninstall-autostart.ps1  # remove autostart
+Get-Content logs\dapan-$(Get-Date -f yyyy-MM-dd).log -Tail 30 -Wait          # watch the log (no admin needed)
+powershell -ExecutionPolicy Bypass -File scripts\restart-dapan.ps1           # restart, e.g. after editing .env
+powershell -ExecutionPolicy Bypass -File scripts\restart-dapan.ps1 -Build    # rebuild + restart after changing code
+powershell -ExecutionPolicy Bypass -File scripts\stop-dapan.ps1              # stop until the next boot
+powershell -ExecutionPolicy Bypass -File scripts\uninstall-autostart.ps1     # remove the tasks
 ```
 
-**After changing the code:** stop the bot, run `cargo build --release`, then start it again. Windows won't replace `dapan.exe` while it's running.
+Set Windows Sleep to **Never** (Settings → System → Power) so the bot stays online.
 
-The bot runs only while you're logged in. Make sure Windows Sleep is set to **Never** (Settings → System → Power) so the bot stays online.
+**`.env` format:** if a value contains spaces, put it in double quotes, for example `HOME_CITY="Hà Nội"`. Dapan refuses to start with a clear error message if a line can't be read. Otherwise every setting after a bad line would be silently ignored.
 
 ## 6. Local voice (VieNeu-TTS, optional but recommended)
 
@@ -82,11 +87,11 @@ py -3.11 -m venv .venv
 .venv\Scripts\python samples.py      # optional: a sample of every voice in tts-server\samples
 ```
 
-Then add these to `.env` and run `scripts\install-autostart.ps1` again, which also adds a **Dapan TTS Server** login task:
+Then add these to `.env` and run `scripts\install-autostart.ps1` again, which also adds the **Dapan TTS Server** background task:
 
 ```
 TTS_LOCAL_URL=http://127.0.0.1:5005
-TTS_LOCAL_VOICE=Trúc Ly
+TTS_LOCAL_VOICE="Trúc Ly"
 TTS_PITCH=0
 ```
 

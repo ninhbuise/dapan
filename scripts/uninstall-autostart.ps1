@@ -1,5 +1,14 @@
-# Stops Dapan and the TTS server and removes their login tasks.
-# Run:  powershell -ExecutionPolicy Bypass -File scripts\uninstall-autostart.ps1
+# Stops Dapan and the TTS server and removes their scheduled tasks.
+# Run (asks for administrator permission):
+#   powershell -ExecutionPolicy Bypass -File scripts\uninstall-autostart.ps1
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    exit
+}
 
 foreach ($taskName in 'Dapan Discord Bot', 'Dapan TTS Server') {
     if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
@@ -8,9 +17,6 @@ foreach ($taskName in 'Dapan Discord Bot', 'Dapan TTS Server') {
         Write-Host "Removed task '$taskName'."
     }
 }
-Get-Process dapan -ErrorAction SilentlyContinue | Stop-Process -Force
-$server = Join-Path (Split-Path -Parent $PSScriptRoot) 'tts-server'
-Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
-    Where-Object { $_.CommandLine -like '*server.py*' -and $_.ExecutablePath -like "$server*" } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+& (Join-Path $PSScriptRoot 'stop-dapan.ps1') -NoElevate
 Write-Host 'Dapan stopped.'
+Start-Sleep -Seconds 2

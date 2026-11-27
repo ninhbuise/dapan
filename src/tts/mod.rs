@@ -200,10 +200,15 @@ pub async fn speak(
 
     // Consumer: join voice while the first chunk is being made, then play in order.
     let consumer = async {
-        let t = Instant::now();
-        let (call, first) = tokio::join!(ensure_call(data, guild, channel), rx.recv());
-        data.tracker
-            .note(key, format!("vào voice {}", secs(t.elapsed())));
+        // Time the join on its own (the first chunk is being made in parallel).
+        let join = async {
+            let t = Instant::now();
+            let r = ensure_call(data, guild, channel).await;
+            data.tracker
+                .note(key, format!("vào voice {}", secs(t.elapsed())));
+            r
+        };
+        let (call, first) = tokio::join!(join, rx.recv());
         let call = call?;
         let Some(first) = first else { return Ok(()) };
         let first = first?;
