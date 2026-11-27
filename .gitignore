@@ -2,7 +2,6 @@
 .env
 /data
 /logs
-.env.example
 /tts-server/.venv
 /tts-server/samples
 /tts-server/voices
