@@ -161,6 +161,39 @@ Watch out for:
 - **Local voice on a server** needs a GPU instance, which costs much more. Leave `TTS_LOCAL_URL` empty there and Dapan uses Microsoft's voice.
 - **Firewall:** voice only uses outgoing connections, so only SSH needs to be open.
 
+## 9. Linux server with automatic deploys
+
+Every push to `main` runs `.github/workflows/ci-deploy.yml`:
+1. **test** (GitHub's servers): `cargo clippy` and `cargo test`.
+2. **deploy** (a self-hosted runner on the server, label `dapan`): only if the tests pass. It resets `~/apps/dapan` to the pushed commit and runs `scripts/deploy.sh`, which builds, restarts Dapan, and fails the run if Dapan isn't running 15 s later. If the build fails, the old binary keeps running.
+
+There's no `pull_request` trigger on purpose: the repo is public, and code from forks must never run on the server.
+
+One-time server setup (Ubuntu):
+
+```bash
+sudo apt install -y build-essential cmake pkg-config libopus-dev ffmpeg git curl python3-venv python3-dev
+sudo loginctl enable-linger $USER     # user services start at boot, without logging in
+curl https://sh.rustup.rs -sSf | sh -s -- -y && source ~/.cargo/env
+# yt-dlp in ~/.local/bin and Deno in ~/.deno/bin (the service's PATH includes both)
+git clone git@github.com:<you>/dapan.git ~/apps/dapan && cd ~/apps/dapan
+cp .env.example .env && nano .env
+scripts/install-linux.sh && scripts/deploy.sh
+```
+
+Then add a runner: repo **Settings → Actions → Runners → New self-hosted runner**, download it to `~/actions-runner`, run `./config.sh --url … --token … --labels dapan`, and run `run.sh` as a user service (`~/.config/systemd/user/actions-runner.service`).
+
+Day-to-day:
+
+```bash
+journalctl --user -u dapan -f                 # bot log
+journalctl --user -u dapan-tts -f             # local voice log
+systemctl --user restart dapan                # restart, e.g. after editing .env
+systemctl --user status dapan dapan-tts actions-runner
+```
+
+**Local voice on Pascal GPUs (GTX 10xx):** PyTorch's CUDA 12.8 build doesn't support them. Use the CUDA 12.6 build instead: `--index-url https://download.pytorch.org/whl/cu126`.
+
 ## Commands
 
 | Command | What it does |

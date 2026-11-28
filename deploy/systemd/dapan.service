@@ -1,0 +1,17 @@
+# User service for the Dapan bot. Installed by scripts/install-linux.sh,
+# which replaces @ROOT@ with the repo path.
+[Unit]
+Description=Dapan Discord bot
+After=network-online.target dapan-tts.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/target/release/dapan
+Environment=PATH=%h/.local/bin:%h/.deno/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

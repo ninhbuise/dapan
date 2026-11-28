@@ -1,0 +1,44 @@
+name: CI / Deploy
+
+# Only pushes to main (and manual runs) start this workflow. There is deliberately
+# no pull_request trigger: the deploy job runs on a self-hosted runner, and this
+# repo is public, so code from forks must never reach that machine.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libopus-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --all-targets
+      - run: cargo test --locked
+
+  deploy:
+    needs: test
+    runs-on: [self-hosted, dapan]
+    concurrency:
+      group: deploy-dapan
+      cancel-in-progress: false
+    steps:
+      - name: Update deploy copy
+        run: |
+          cd "$HOME/apps/dapan"
+          echo "PREV=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git fetch --quiet origin main
+          git checkout --quiet main
+          git reset --quiet --hard "$GITHUB_SHA"
+          git log --oneline -1
+      - name: Build and restart
+        run: '"$HOME/apps/dapan/scripts/deploy.sh" "$PREV"'

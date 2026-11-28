@@ -1,0 +1,16 @@
+# User service for the local VieNeu TTS server (optional). Installed by
+# scripts/install-linux.sh when tts-server/.venv exists.
+[Unit]
+Description=Dapan local TTS server (VieNeu)
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=@ROOT@/tts-server
+ExecStart=@ROOT@/tts-server/.venv/bin/python server.py
+Environment=PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
